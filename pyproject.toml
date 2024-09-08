@@ -1,0 +1,31 @@
+[tool.poetry]
+name = "job_posting"
+version = "0.1.0"
+description = "job posting app"
+authors = ["cycling777 <github.cycling777@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+jupyter = "^1.0.0"
+notebook = "^7.2.0"
+langchain = "^0.2.0"
+langchain-tools = "^0.1.34"
+langchain-community = "^0.2.0"
+openai = "^1.30.1"
+duckduckgo-search = "5.3.1b1"
+python-dotenv = "^1.0.1"
+langchain-openai = "^0.1.7"
+langchainhub = "^0.1.15"
+boto3 = "^1.34.110"
+deepgram-sdk = "^3.2.7"
+ffmpeg-python = "^0.2.0"
+pexpect = "^4.9.0"
+pandas = "^2.2.2"
+langchain-aws = "^0.1.17"
+google-cloud-aiplatform = "^1.64.0"
+streamlit = "^1.38.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

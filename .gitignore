@@ -1,0 +1,85 @@
+# Python関連
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.egg-info/
+.eggs/
+*.pyc
+
+# 仮想環境
+venv
+env/
+.env
+.venv/
+
+# IDEとエディタ
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS関連
+.DS_Store
+Thumbs.db
+
+# ログファイル
+*.log
+
+# 一時ファイル
+tmp/
+temp/
+
+# 設定ファイル
+*.ini
+*.cfg
+config.py
+
+# データベース
+*.db
+*.sqlite3
+
+# 依存関係
+/node_modules
+/bower_components
+
+# ビルド成果物
+/dist
+/build
+
+# キャッシュ
+.cache/
+.pytest_cache/
+
+# カバレッジレポート
+.coverage
+htmlcov/
+
+# ドキュメント生成
+docs/_build/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# 機密情報
+secrets.yaml
+credentials.json
+
+# その他
+*.bak
+*.tmp
+*.old
+
+# 出力ファイルとフォルダ
+/output
+/uploaded_files
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Google Cloud credentials
+google.dev.json

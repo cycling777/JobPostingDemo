@@ -57,7 +57,9 @@ def handle_uploaded_file(uploaded_file):
     file_name = uploaded_file.name
     file_extension = os.path.splitext(file_name)[1]
     save_dir = "uploaded_files"
+    output_dir = "output"
     os.makedirs(save_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     file_path = os.path.join(save_dir, file_name)
 
     with open(file_path, "wb") as f:

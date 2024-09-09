@@ -110,22 +110,32 @@ def main():
     client_name = st.text_input("企業担当者の名前を入力してください", "山本")
     interviewee_name = st.text_input("面接者の名前を入力してください", "岩淵")
 
+    # モデル選択のオプション
+    model_options = [
+        {"provider": "OpenAI", "name": "GPT-4o", "model_id": "gpt-4o-2024-08-06"},
+        {"provider": "OpenAI", "name": "GPT-4o-mini", "model_id": "gpt-4o-mini"},
+        {"provider": "BedRock", "name": "Claude 3.5 Sonnet", "model_id": "anthropic.claude-3-5-sonnet-20240620-v1:0"},
+        {"provider": "BedRock", "name": "Claude 3 Haiku", "model_id": "anthropic.claude-3-haiku-20240307-v1:0"}
+    ]
+
+    # セレクトボックスの表示用関数
+    def format_model_option(option):
+        return f"{option['name']} ({option['provider']})"
+
     # モデル選択のドロップダウン
-    model_options = {
-        "GPT-4o": "gpt-4o",
-        "Claude 3.5 Sonnet": "anthropic.claude-3-5-sonnet-20240620-v1:0"
-    }
     selected_model = st.selectbox(
         "使用するモデルを選択してください",
-        options=list(model_options.keys()),
-        format_func=lambda x: x
+        options=model_options,
+        format_func=format_model_option
     )
-    model_id = model_options[selected_model]
-    
-    if selected_model == "GPT-4o":
-        llm = ChatOpenAI(model=model_id)
-    elif selected_model == "Claude 3.5 Sonnet":
-        llm = ChatBedrock(model_id=model_id, region_name="ap-northeast-1")
+
+    # 選択されたモデルに基づいてLLMインスタンスを作成
+    if selected_model["provider"] == "OpenAI":
+        llm = ChatOpenAI(model=selected_model["model_id"])
+    elif selected_model["provider"] == "BedRock":
+        llm = ChatBedrock(model_id=selected_model["model_id"], region_name="ap-northeast-1")
+    else:
+        st.error(f"未サポートのプロバイダー: {selected_model['provider']}")
 
     # インタビュープロンプトの生成
     interview_prompt = generate_business_meeting_prompt(

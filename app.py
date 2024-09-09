@@ -152,10 +152,10 @@ def main():
 
         m4a_path = handle_uploaded_file(uploaded_file)
 
-        # 分析実行ボタン
-        if st.button("分析開始"):
-            with st.spinner("分析中..."):
-                # 音声分析
+        # 全体実行ボタン
+        if st.button("全体実行"):
+            with st.spinner("全ての処理を実行中..."):
+                # 議事録作成
                 response = analyze_sounds(
                     gcp_bucket=gcp_bucket,
                     gcp_bucket_name=GCP_BUCKET_NAME,
@@ -164,13 +164,11 @@ def main():
                     prompt=interview_prompt
                 )
                 minutes = response.candidates[0].content.parts[0].text
-
-                # 議事録の保存
                 with open('./output/minutes.txt', 'w', encoding='utf-8') as f:
                     f.write(minutes)
                 st.success("議事録が生成されました")
 
-                # Web検索（リトライ機能付き）
+                # Web検索
                 max_retries = 3
                 retry_count = 0
                 while retry_count < max_retries:
@@ -191,6 +189,58 @@ def main():
                 job_posting = generate_job_posting(minutes, web_result["output"], llm)
                 save_job_posting_to_csv(job_posting, "./output")
                 st.success("求人情報が生成されました")
+
+        st.markdown("---")
+        st.subheader("個別処理")
+
+        # 議事録作成ボタン
+        if st.button("議事録作成"):
+            with st.spinner("議事録作成中..."):
+                response = analyze_sounds(
+                    gcp_bucket=gcp_bucket,
+                    gcp_bucket_name=GCP_BUCKET_NAME,
+                    audio_file=m4a_path,
+                    model_name=GEMINI_MODEL_NAME,
+                    prompt=interview_prompt
+                )
+                minutes = response.candidates[0].content.parts[0].text
+
+                with open('./output/minutes.txt', 'w', encoding='utf-8') as f:
+                    f.write(minutes)
+                st.success("議事録が生成されました")
+
+        # Web検索ボタン
+        if st.button("Web検索実行"):
+            with st.spinner("Web検索中..."):
+                max_retries = 3
+                retry_count = 0
+                while retry_count < max_retries:
+                    try:
+                        web_result, usage = execute_web_search(url, target_company, web_search_task, instruction, llm)
+                        with open('./output/web_search_result.txt', 'w', encoding='utf-8') as f:
+                            f.write(web_result["output"])
+                        st.success("Web検索が完了しました")
+                        break
+                    except Exception as e:
+                        retry_count += 1
+                        if retry_count == max_retries:
+                            st.error(f"Web検索に失敗しました。エラー: {str(e)}")
+                        else:
+                            st.warning(f"Web検索に失敗しました。リトライ中... ({retry_count}/{max_retries})")
+
+        # CSV出力ボタン
+        if st.button("求人情報CSV出力"):
+            if not os.path.exists('./output/minutes.txt') or not os.path.exists('./output/web_search_result.txt'):
+                st.error("議事録とWeb検索結果が必要です。先に議事録作成とWeb検索を実行してください。")
+            else:
+                with st.spinner("求人情報生成中..."):
+                    with open('./output/minutes.txt', 'r', encoding='utf-8') as f:
+                        minutes = f.read()
+                    with open('./output/web_search_result.txt', 'r', encoding='utf-8') as f:
+                        web_result_output = f.read()
+                    job_posting = generate_job_posting(minutes, web_result_output, llm)
+                    save_job_posting_to_csv(job_posting, "./output")
+                    st.success("求人情報が生成されました")
 
         # ファイルダウンロードボタン
         if os.path.exists('./output/minutes.txt'):

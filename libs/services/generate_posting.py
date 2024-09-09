@@ -1,13 +1,11 @@
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+from langchain_aws import ChatBedrock
 from langchain_community.callbacks.manager import get_openai_callback
 from langchain_core.output_parsers import StrOutputParser
 from libs.schemas.job_posting import JobPosting
 import pandas as pd
 import os
-
-def create_llm():
-    return ChatOpenAI(model="gpt-4o")
 
 def create_data_validation_prompt():
     data_validation_task = """
@@ -21,8 +19,8 @@ def create_data_validation_prompt():
 
     これらを用いて、求人票を作成します。
     schemaに従って、情報を落とすことなくデータを整理してください。
-    ポイントとしては、
-    1. 与えられたデータの内容をもとに求人票を作成すること。わからないことは不明と記述すること。
+    ポイントは、
+    1. 与えられたデータの内容をもとに求人票を作成すること。できるだけ内容は埋めること。
     2. 改行をうまく使って、読みやすいフォーマットにすること。
     3. 求職者にとってわかりやすく説明すること。
     4. 事業内容は、具体的なサービスや製品、それらが市場や顧客にどのように価値を提供しているかを記述してください。強みや独自性、技術革新の事例を交えて、情熱的かつインスパイアするような形で記載し、求職者が当社でのキャリアを通じて達成できる影響を感じられるようにすること。
@@ -36,8 +34,7 @@ def create_data_validation_prompt():
         ("user", "クライアントについてのweb検索の結果: {web_search_result}")
     ])
 
-def generate_job_posting(minute, web_search_result):
-    llm = create_llm()
+def generate_job_posting(minute, web_search_result, llm: ChatOpenAI | ChatBedrock):
     data_validation_prompt = create_data_validation_prompt()
     data_validation_chain = data_validation_prompt | llm.with_structured_output(JobPosting)
 

@@ -17,6 +17,8 @@ import vertexai
 import vertexai.generative_models as genai
 from google.cloud import storage
 # from libs.core.config import GEMINI_MODEL_NAME, GOOGLE_APPLICATION_CREDENTIALS, GCP_BUCKET_NAME
+from langchain_openai import ChatOpenAI
+from langchain_aws import ChatBedrock
 from libs.services.analyze_sounds import analyze_sounds
 from libs.services.prompts.business_meeting import generate_business_meeting_prompt
 from libs.services.web_search import execute_web_search, web_search_task, instruction
@@ -108,6 +110,23 @@ def main():
     client_name = st.text_input("企業担当者の名前を入力してください", "山本")
     interviewee_name = st.text_input("面接者の名前を入力してください", "岩淵")
 
+    # モデル選択のドロップダウン
+    model_options = {
+        "GPT-4o": "gpt-4o",
+        "Claude 3.5 Sonnet": "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    }
+    selected_model = st.selectbox(
+        "使用するモデルを選択してください",
+        options=list(model_options.keys()),
+        format_func=lambda x: x
+    )
+    model_id = model_options[selected_model]
+    
+    if selected_model == "GPT-4o":
+        llm = ChatOpenAI(model=model_id)
+    elif selected_model == "Claude 3.5 Sonnet":
+        llm = ChatBedrock(model_id=model_id, region_name="ap-northeast-1")
+
     # インタビュープロンプトの生成
     interview_prompt = generate_business_meeting_prompt(
         interviewee_name=interviewee_name,
@@ -146,7 +165,7 @@ def main():
                 retry_count = 0
                 while retry_count < max_retries:
                     try:
-                        web_result, usage = execute_web_search(url, target_company, web_search_task, instruction)
+                        web_result, usage = execute_web_search(url, target_company, web_search_task, instruction, llm)
                         with open('./output/web_search_result.txt', 'w', encoding='utf-8') as f:
                             f.write(web_result["output"])
                         st.success("Web検索が完了しました")
@@ -159,7 +178,7 @@ def main():
                             st.warning(f"Web検索に失敗しました。リトライ中... ({retry_count}/{max_retries})")
 
                 # 求人情報生成
-                job_posting = generate_job_posting(minutes, web_result["output"])
+                job_posting = generate_job_posting(minutes, web_result["output"], llm)
                 save_job_posting_to_csv(job_posting, "./output")
                 st.success("求人情報が生成されました")
 

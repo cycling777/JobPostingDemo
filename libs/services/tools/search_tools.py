@@ -1,10 +1,14 @@
+from typing import Dict, Any
 from langchain.agents import tool
 from duckduckgo_search import DDGS
 from datetime import datetime, timedelta
 from libs.services.tools.htmltextextractor import HTMLTextExtractor
 from langchain_openai import ChatOpenAI
+from langchain_aws import ChatBedrock
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.pydantic_v1 import BaseModel, Field
+
 
 
 
@@ -17,22 +21,26 @@ def create_timelimit(years):
     return timelimit
 
 @tool
-def ddg_search(query: str) -> str:
+def ddg_search(query: str, region: str = 'jp-jp', max_results: int = 5) -> str:
     """
     Performs a DuckDuckGo search using the provided query and returns the search results as a formatted string.
 
-    Use this function to search for information on the web using DuckDuckGo and retrieve the top search results.
-    The function takes a search query as input and returns a formatted string containing the titles, summaries,
-    and URLs of the top search results.
+    Args:
+        query (str): The search query.
+        region (str, optional): The region for the search. Defaults to 'jp-jp'.
+        max_results (int, optional): The maximum number of results to return. Defaults to 5.
+
+    Returns:
+        str: A formatted string containing the search results.
     """
     search = DDGS()
     results = search.text(
         keywords=query,
-        region='jp-jp',
+        region=region,
         safesearch='off',
         timelimit=create_timelimit(3),
-        max_results=5
-      )
+        max_results=max_results
+    )
     results_str = "\n\n".join(
         [f"title: {result['title']}\nsummary: {result['body']}\nurl: {result['href']}" for result in results]
     ) + "\n\n"
@@ -70,30 +78,30 @@ def extract_body_content(url: str) -> str:
     return body_content
 
 @tool
-def analyze_content_from_url(input_str: str) -> str:
+def analyze_content_from_url(url: str, task: str, model_type: str = "bedrock", model_id: str = "anthropic.claude-3-5-sonnet-20240620-v1:0") -> str:
     """
-    Extracts the body content from the specified URL, analyzes it using the chatgpt language model,
+    Extracts the body content from the specified URL, analyzes it using the specified language model,
     and returns a formatted report in Japanese based on the given task.
 
     Args:
-        input_str (str): A string containing the URL and task, separated by a delimiter (e.g., "url|task").
+        url (str): The URL to analyze.
+        task (str): The task to perform on the content.
+        model_type (str, optional): The type of model to use ("openai" or "bedrock"). Defaults to "bedrock".
+        model_id (str, optional): The model ID to use for analysis. Defaults to "anthropic.claude-3-5-sonnet-20240620-v1:0" for OpenAI.
 
     Returns:
-        str: A formatted string containing the generated report in Japanese, including the title,
-             content (in bullet points), and the source URL.
+        str: A formatted string containing the generated report in Japanese.
     """
-    # Extract the URL and task from the input string
-    url, task = input_str.split("|", 1)
-
-    # Extract the body content from the URL
     body_content = extract_body_content(url)
-    model_id = "anthropic.claude-3-haiku-20240307-v1:0"
+    
+    if model_type.lower() == "openai":
+        chat = ChatOpenAI(model=model_id)
+    elif model_type.lower() == "bedrock":
+        chat = ChatBedrock(model_id=model_id, region_name="ap-northeast-1")
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}. Use 'openai' or 'bedrock'.")
 
-
-    chat = ChatOpenAI(model="gpt-4o")
     system = "あなたは求人情報を収集するアシスタントです。"
-    # human1 = "はじめまして！よろしくお願いします！"
-    # assistant1 = "はじめまして！私は、あなたの情報収集のお手伝いをして、日本語のレポートを提出します。何についての情報を収集したいのか、レポートのトピックは何ですか？詳しく教えてください、私はお手伝いします！"
     human2 = f"""
     今回あなたにお願いしたいのは提供されたbody情報の整理です。body情報は以下です。
     {body_content}
@@ -120,7 +128,6 @@ def analyze_content_from_url(input_str: str) -> str:
     report = chain.invoke({"body_content": body_content, "task": task})
 
     return report + "\n"
-
 
 import requests
 from bs4 import BeautifulSoup

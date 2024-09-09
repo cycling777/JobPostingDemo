@@ -1,15 +1,18 @@
 # @title ReAct XML Perser
 import re
+import json
+from functools import partial
 from typing import Union
 
 from langchain import hub
 from langchain.tools.render import render_text_description
-from langchain.agents import AgentExecutor
+from langchain.agents import AgentExecutor, tool
 from langchain_openai import ChatOpenAI
 from langchain.prompts.chat import ChatPromptTemplate
 from langchain.agents.agent import AgentOutputParser
 from langchain.agents.mrkl.prompt import FORMAT_INSTRUCTIONS
 from langchain.schema import AgentAction, AgentFinish, OutputParserException
+from langchain.schema.output_parser import StrOutputParser
 from typing import List, Tuple
 
 from libs.services.tools.search_tools import ddg_search,get_internal_links_with_text, extract_body_content,analyze_content_from_url
@@ -50,9 +53,7 @@ class ClaudeReActSingleInputOutputParser(AgentOutputParser):
         includes_answer = FINAL_ANSWER_ACTION in text
         includes_summary = "<Summary>" in text
 
-        regex = (
-            r"<Action>[\s]*(.*?)[\s]*</Action>[\s]*<Action Input>[\s]*(.*)[\s]*</Action Input>"
-        )
+        regex = r"<Action>[\s]*(.*?)[\s]*</Action>[\s]*<Action Input>[\s]*(.*?)[\s]*</Action Input>"
         action_match = re.search(regex, text, re.DOTALL)
         if action_match:
             if includes_answer:
@@ -60,9 +61,14 @@ class ClaudeReActSingleInputOutputParser(AgentOutputParser):
                     f"{FINAL_ANSWER_AND_PARSABLE_ACTION_ERROR_MESSAGE}: {text}"
                 )
             action = action_match.group(1).strip()
-            action_input = action_match.group(2)
-            tool_input = action_input.strip(" ")
-            tool_input = tool_input.strip('"')
+            action_input = action_match.group(2).strip()
+
+            # JSONとして解析を試みる
+            try:
+                tool_input = json.loads(action_input)
+            except json.JSONDecodeError:
+                # JSON解析に失敗した場合は、単一の文字列として扱う
+                tool_input = action_input.strip('"')
 
             return AgentAction(action, tool_input, text)
 
@@ -101,20 +107,6 @@ class ClaudeReActSingleInputOutputParser(AgentOutputParser):
         return "react-single-input"
 
 
-
-def format_log_to_str(
-    intermediate_steps: List[Tuple[AgentAction, str]],
-    observation_prefix: str = "<Observation>",
-    observation_suffix: str = "</Observation>",
-    llm_prefix: str = "<Thought>",
-) -> str:
-    """Construct the scratchpad that lets the agent continue its thought process."""
-    thoughts = ""
-    for action, observation in intermediate_steps:
-        thoughts += action.log
-        thoughts += f"\n{observation_prefix}{observation}{observation_suffix}\n{llm_prefix}"
-    return thoughts
-
 def get_references(
     intermediate_steps: List[Tuple[AgentAction, ChatPromptTemplate]],
 ) -> str:
@@ -124,13 +116,100 @@ def get_references(
         refs.append(ref)
     return refs
 
-def web_search_agent_executor():
+
+from langchain_community.callbacks.manager import get_openai_callback, get_bedrock_anthropic_callback
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_openai import ChatOpenAI
+from langchain_aws import ChatBedrock
+from typing import Dict, Any
+
+class TokenCounter(BaseCallbackHandler):
+    def __init__(self):
+        self.total_tokens = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+
+    def on_llm_start(self, serialized: Dict[str, Any], prompts: List[str], **kwargs: Any) -> None:
+        pass
+
+    def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+        if hasattr(response, 'llm_output') and response.llm_output:
+            usage = response.llm_output.get('usage', {})
+            self.total_tokens += usage.get('total_tokens', 0)
+            self.prompt_tokens += usage.get('prompt_tokens', 0)
+            self.completion_tokens += usage.get('completion_tokens', 0)
+
+
+def web_search_agent_executor(llm: ChatOpenAI | ChatBedrock):
+    # LLMの種類に基づいてmodel_typeとmodel_idを設定
+    if isinstance(llm, ChatOpenAI):
+        model_type = "openai"
+        model_id = llm.model_name
+    elif isinstance(llm, ChatBedrock):
+        model_type = "bedrock"
+        model_id = llm.model_id
+        region_name = llm.region_name
+    else:
+        raise ValueError(f"Unsupported LLM type: {type(llm)}. Use ChatOpenAI or ChatBedrock.")
+
+
+    @tool
+    def analyze_content_from_url(url: str, task: str):
+        """
+        Extracts the body content from the specified URL, and returns a formatted report in Japanese based on the given task.
+
+        Args:
+            url (str): The URL to analyze.
+            task (str): The task to perform on the content.
+
+        Returns:
+            str: A formatted string containing the generated report in Japanese.
+        """
+        body_content = extract_body_content(url)
+        
+        if model_type.lower() == "openai":
+            chat = ChatOpenAI(model=model_id)
+        elif model_type.lower() == "bedrock":
+            chat = ChatBedrock(model_id=model_id, region_name=region_name)
+        else:
+            raise ValueError(f"Unsupported model type: {model_type}. Use 'openai' or 'bedrock'.")
+
+        system = "あなたは求人情報を収集するアシスタントです。"
+        human2 = f"""
+        今回あなたにお願いしたいのは提供されたbody情報の整理です。body情報は以下です。
+        {body_content}
+        ここからは具体的なタスクの内容です。
+        - 適切な項目を設定して、情報を落とすことなく箇条書きにしてください
+        - 情報のソースがわかるようにurlを記載してください。
+        - 特に、"{task}"に関連する情報に注目してください。
+        具体的な出力の形式は以下のようにお願いします。
+        <Report>
+        <Title>タイトル</Title>
+        <Content>
+        - 箇条書きのコンテンツ
+        </Content>
+        <Url>ソースのurl</Url>
+        </Report>
+        それでは情報収集のお手伝いをお願いします。
+        """
+        prompt = ChatPromptTemplate.from_messages(
+            [("system", system),
+            ("human", human2)]
+        )
+        chain = prompt | chat | StrOutputParser()
+
+        report = chain.invoke({"body_content": body_content, "task": task})
+
+        return report + "\n"
+
+    # ツール情報を LLM に渡すために変換
+    tools = [ddg_search, analyze_content_from_url, get_internal_links_with_text]
+    tool_names = ", ".join([t.name for t in tools])
+
     # Define Prompt
     # デフォルトのプロンプトを取得
     prompt = hub.pull("hwchase17/react")
-    # ツール情報を LLM に渡すために変換
-    tools = [ddg_search, analyze_content_from_url,get_internal_links_with_text]
-    tool_names = ", ".join([t.name for t in tools])
+    
     # ツール情報をプロンプトに渡す
     prompt = prompt.partial(
         tools=render_text_description(tools),
@@ -150,7 +229,13 @@ def web_search_agent_executor():
 <output-format>
 <Thought>指示に答えるために何をするべきか検討</Thought>
 <Action>実行するアクション。必ず {tool_names} から選択する。</Action>
-<Action Input>Action への入力</Action Input>
+<Action Input>
+{{
+  "param1": "値1",
+  "param2": "値2",
+  ...
+}}
+</Action Input>
 <Observation>アクションの結果</Observation>
 ... (Thought/Action/Action Input/Observation を N 回繰り返す)
 <Thought>答えるのに必要な情報が揃いました</Thought>
@@ -171,10 +256,9 @@ Assistant:
 <Thought>{agent_scratchpad}
 """
 
-
-    llm = ChatOpenAI(model="gpt-4o")
     # 生成 AI が生成を止めるためのルールを定義。Bedrock に渡され、このトークンが生成されたら生成が止まる
     llm_with_stop = llm.bind(stop=["\n<Observation>"])
+    token_counter = TokenCounter()
 
     # Agent の作成
     agent = {
@@ -187,17 +271,15 @@ Assistant:
         agent=agent,
         tools=tools,
         return_intermediate_steps=True,
-        # verbose=True,
+        verbose=True,
         max_iterations=50,  # max_iterationsを増やす
         early_stopping_method="generate",  # early_stopping_methodを変更
         max_execution_time=300,  # max_execution_timeを増やす
+        callbacks=[token_counter]
     )
-    return agent_executor
+    return agent_executor, token_counter
 
 
-from langchain_community.callbacks.manager import get_bedrock_anthropic_callback, get_openai_callback
-
-web_search_agent_executor = web_search_agent_executor()
 instruction = """
 Case1 -- urlがユーザーの入力に含まれる場合:
 1. analyze_content_from_urlでタスクに必要な情報があるのか確認する
@@ -218,6 +300,8 @@ Case2 -- urlがユーザーの入力に含まれない場合:
 - 足りない情報がある場合は、調べきれてないことを前提で再検索してください
 """
 
+from langchain_community.callbacks.manager import get_bedrock_anthropic_callback, get_openai_callback
+
 web_search_task = """
 あなたには求人票を作成するための情報を収集してもらいます。
 以下の情報をホームページからすべて集めてきてください。特に、会社概要、事業内容、所在地、財務ページに注目してください。情報は詳しく出力すること。
@@ -234,27 +318,26 @@ web_search_task = """
 -休暇: 年間休日数、有給休暇取得率、特別休暇、リフレッシュ休暇など、当社の休暇制度について記載してください。休暇制度に関する情報が明確に示されていない場合は、代わりに年間休日数や有給休暇取得率を記載してください。
 -その他魅力的な情報: その他、求職者にとって魅力的な情報があれば記載してください。例えば、社内イベントや社内制度、社員の声、社内風土、社内環境、社内風景、社内制度
 """
-
-
-def execute_web_search(url: str, company_name: str, web_search_task: str, instruction: str):
-    from langchain_community.callbacks.manager import get_openai_callback
+            
+def execute_web_search(url: str, company_name: str, web_search_task: str, instruction: str, llm):
+    agent_executor, token_counter = web_search_agent_executor(llm)
     
     web_search_task = f"url: {url}\ntask: {web_search_task}\n今回解析する会社は{company_name}です。"
+    
+    web_search_result = agent_executor.invoke({
+        "input": web_search_task,
+        "instruction": instruction,
+    })
+    
+    token_usage = {
+        "total_tokens": token_counter.total_tokens,
+        "prompt_tokens": token_counter.prompt_tokens,
+        "completion_tokens": token_counter.completion_tokens,
+    }
+    
+    return web_search_result, token_usage
+        
 
-    with get_openai_callback() as cb:
-        web_search_result = web_search_agent_executor.invoke({
-            "input": web_search_task,
-            "instruction": instruction,
-        })
-        
-        token_usage = {
-            "total_tokens": cb.total_tokens,
-            "prompt_tokens": cb.prompt_tokens,
-            "completion_tokens": cb.completion_tokens,
-            "total_cost_usd": cb.total_cost
-        }
-        
-        return web_search_result, token_usage
 
 # 使用例:
 # result, usage = execute_web_search(url, company_name, web_search_task, instruction)

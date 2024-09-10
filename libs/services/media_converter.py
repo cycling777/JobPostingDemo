@@ -126,12 +126,16 @@ class FFmpegM4AConverter:
             print(f"Error occurred during conversion: {stderr}")
             print(f"FFmpeg stdout: {stdout}")
 
-    def convert(self, input_file, output_dir, normalize=True, equalizer=None, vbr=False, metadata=None):
+    def convert(self, input_file, output_dir, normalize=True, equalizer=None, vbr=False, metadata=None, output_filename=None):
         _, extension = os.path.splitext(input_file)
         if extension.lower() not in self.supported_extensions:
-            raise ValueError(f"Unsupported file extension: {extension}")
+            raise ValueError(f"サポートされていないファイル拡張子です: {extension}")
 
-        output_file = os.path.splitext(os.path.basename(input_file))[0] + "_converted.m4a"
+        if output_filename:
+            output_file = output_filename
+        else:
+            output_file = os.path.splitext(os.path.basename(input_file))[0] + "_converted.m4a"
+        
         output_path = os.path.join(output_dir, output_file)
         os.makedirs(output_dir, exist_ok=True)
 

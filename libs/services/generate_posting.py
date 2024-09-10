@@ -51,7 +51,7 @@ def generate_job_posting(minute, web_search_result, llm: ChatOpenAI | ChatBedroc
 
     return job_posting
 
-def save_job_posting_to_csv(job_posting, folder_path):
+def save_job_posting_to_csv(job_posting, output_dir, output_filename):
     reference_columns = ['☆企業名', '☆従業員数', '☆売上高', '☆会社設立日',
                          '☆事業内容', '業界', '会社所在地', '☆募集ポジション名',
                          '☆雇用形態（期間）', '☆試用期間の有無', '☆業務内容',
@@ -65,17 +65,17 @@ def save_job_posting_to_csv(job_posting, folder_path):
     df = pd.DataFrame([job_posting.dict()])
     df.columns = reference_columns
 
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
-    file_path = os.path.join(folder_path, 'job_postings.csv')
+    file_path = os.path.join(output_dir, output_filename)
     df.to_csv(file_path, index=False)
     print(f"DataFrame saved to {file_path}")
 
-def main(minute, web_search_result, folder_path):
+def main(minute, web_search_result, output_dir, output_filename):
     job_posting = generate_job_posting(minute, web_search_result)
-    save_job_posting_to_csv(job_posting, folder_path)
+    save_job_posting_to_csv(job_posting, output_dir, output_filename)
 
 if __name__ == "__main__":
     # ここで実際の minute, web_search_result, folder_path を指定して main 関数を呼び出す
-    main("サンプル議事録", "サンプルWeb検索結果", "./output")
+    main("サンプル議事録", "サンプルWeb検索結果", "./output", "job_postings.csv")

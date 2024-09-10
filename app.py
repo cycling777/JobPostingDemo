@@ -25,6 +25,10 @@ from libs.services.web_search import execute_web_search, web_search_task, instru
 from libs.services.generate_posting import generate_job_posting, save_job_posting_to_csv
 from libs.services.media_converter import FFmpegM4AConverter
 import mimetypes
+import uuid
+import re
+import unicodedata
+import csv
 
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 GEMINI_MODEL_NAME = st.secrets["GEMINI_MODEL_NAME"]
@@ -50,29 +54,42 @@ storage_client = storage.Client.from_service_account_json(GOOGLE_APPLICATION_CRE
 gcp_bucket = storage_client.bucket(GCP_BUCKET_NAME)
 vertexai.init(project='dev-rororo')
 
+def sanitize_filename(filename):
+    # Unicode正規化
+    filename = unicodedata.normalize('NFKC', filename)
+    # 特殊文字と空白を置換
+    filename = re.sub(r'[^\w\-_\. ]', '_', filename)
+    # 連続する空白とアンダースコアを単一のアンダースコアに置換
+    filename = re.sub(r'[\s_]+', '_', filename)
+    return filename.strip('_')
 
 def is_valid_media_file(file):
     mime_type, _ = mimetypes.guess_type(file.name)
     return mime_type and mime_type.startswith(('audio/', 'video/'))
 
-def handle_uploaded_file(uploaded_file):
-    file_name = uploaded_file.name
-    file_extension = os.path.splitext(file_name)[1]
-    save_dir = "uploaded_files"
-    output_dir = "output"
+def handle_uploaded_file(uploaded_file, session_id, output_filename=None):
+    original_filename = uploaded_file.name
+    sanitized_filename = sanitize_filename(original_filename)
+    file_extension = os.path.splitext(sanitized_filename)[1]
+    save_dir = f"uploaded_files/{session_id}"
+    output_dir = f"output/{session_id}"
     os.makedirs(save_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
-    file_path = os.path.join(save_dir, file_name)
+    file_path = os.path.join(save_dir, sanitized_filename)
 
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    st.success(f"ファイル '{file_name}' がアップロードされました。")
+    st.success(f"ファイル '{sanitized_filename}' がアップロードされました。")
 
     if file_extension.lower() not in ['.m4a', '.wav']:
         with st.spinner('音声ファイルに変換中...'):
             converter = FFmpegM4AConverter()
-            m4a_path = converter.convert(file_path, save_dir)
+            m4a_path = converter.convert(
+                input_file=file_path,
+                output_dir=save_dir,
+                output_filename=output_filename
+            )
         st.success(f"ファイルが変換されました: {m4a_path}")
     else:
         m4a_path = file_path
@@ -81,28 +98,55 @@ def handle_uploaded_file(uploaded_file):
     return m4a_path
 
 def delete_files_in_directory(directory):
-    for filename in os.listdir(directory):
-        file_path = os.path.join(directory, filename)
-        try:
-            if os.path.isfile(file_path) or os.path.islink(file_path):
+    for root, dirs, files in os.walk(directory, topdown=False):
+        for file in files:
+            file_path = os.path.join(root, file)
+            try:
                 os.unlink(file_path)
-            elif os.path.isdir(file_path):
-                shutil.rmtree(file_path)
-        except Exception as e:
-            st.error(f"ファイル {file_path} の削除中にエラーが発生しました: {e}")
+            except Exception as e:
+                st.error(f"ファイル {file_path} の削除中にエラーが発生しました: {e}")
+        for dir in dirs:
+            dir_path = os.path.join(root, dir)
+            try:
+                os.rmdir(dir_path)
+            except Exception as e:
+                st.error(f"ディレクトリ {dir_path} の削除中にエラーが発生しました: {e}")
+    try:
+        os.rmdir(directory)
+    except Exception as e:
+        st.error(f"ディレクトリ {directory} の削除中にエラーが発生しました: {e}")
 
-def delete_all_files():
-    directories = ['uploaded_files', 'output']
+def delete_files_by_id(session_id):
+    directories = [f'uploaded_files/{session_id}', f'output/{session_id}']
     for directory in directories:
         if os.path.exists(directory):
             delete_files_in_directory(directory)
-    st.success("すべてのファイルが削除されました。")
+            try:
+                os.rmdir(directory)
+            except Exception as e:
+                st.error(f"ディレクトリ {directory} の削除中にエラーが発生しました: {e}")
+    st.success(f"セッションID {session_id} に関連するすべてのファイルとディレクトリが削除されました。")
+
+def delete_all_files():
+    directories_to_delete = ['uploaded_files', 'output']
+    for directory in directories_to_delete:
+        if os.path.exists(directory):
+            for root, dirs, files in os.walk(directory, topdown=False):
+                for file in files:
+                    os.unlink(os.path.join(root, file))
+                for dir in dirs:
+                    os.rmdir(os.path.join(root, dir))
+            os.rmdir(directory)
+    st.success("uploaded_filesとoutputフォルダ以下のすべてのファイルとディレクトリが削除されました。")
+
 
 def main():
+    # セッションIDの生成（ユーザーごとに一意）
+    if 'session_id' not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+
     st.title("求人票デモアプリ")
-    # ファイル削除ボタン
-    if st.button("すべてのファイルを削除"):
-        delete_all_files()
+
 
     # ユーザー入力
     target_company = st.text_input("対象企業名を入力してください", "株式会社マエノメリ")
@@ -143,14 +187,35 @@ def main():
         client_name=client_name
     )
 
-    uploaded_file = st.file_uploader("音声または動画ファイルをアップロードしてください", type=None)
+    uploaded_file = st.file_uploader("音声または動画ファイルをアップロードしてください", type=["mp3", "wav", "ogg", "m4a", "mp4", "mov", "avi"])
+    
+        # ファイル削除ボタン
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("すべてのファイルを削除", key="delete_all_files_button"):
+            delete_all_files()
+            # セッションステートをクリア
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+    
+    with col2:
+        if st.button("現在のセッションのファイルを削除", key="delete_session_files_button"):
+            delete_files_by_id(st.session_state.session_id)
+            st.success("現在のセッションのファイルが削除されました。")
+            # セッションステートをクリア（session_idは保持）
+            session_id = st.session_state.session_id
+            st.session_state.clear()
+            st.session_state.session_id = session_id
+            st.rerun()
 
     if uploaded_file is not None:
         if not is_valid_media_file(uploaded_file):
             st.error("サポートされていないファイル形式です。音声または動画ファイルをアップロードしてください。")
             return
 
-        m4a_path = handle_uploaded_file(uploaded_file)
+        safe_filename = sanitize_filename(os.path.splitext(uploaded_file.name)[0])
+        m4a_path = handle_uploaded_file(uploaded_file, st.session_state.session_id, output_filename=safe_filename)
 
         # 全体実行ボタン
         if st.button("全体実行"):
@@ -164,7 +229,8 @@ def main():
                     prompt=interview_prompt
                 )
                 minutes = response.candidates[0].content.parts[0].text
-                with open('./output/minutes.txt', 'w', encoding='utf-8') as f:
+                minutes_filename = f'./output/{st.session_state.session_id}/{safe_filename}_minutes.txt'
+                with open(minutes_filename, 'w', encoding='utf-8') as f:
                     f.write(minutes)
                 st.success("議事録が生成されました")
 
@@ -174,7 +240,8 @@ def main():
                 while retry_count < max_retries:
                     try:
                         web_result, usage = execute_web_search(url, target_company, web_search_task, instruction, llm)
-                        with open('./output/web_search_result.txt', 'w', encoding='utf-8') as f:
+                        web_search_filename = f'./output/{st.session_state.session_id}/{safe_filename}_web_search_result.txt'
+                        with open(web_search_filename, 'w', encoding='utf-8') as f:
                             f.write(web_result["output"])
                         st.success("Web検索が完了しました")
                         break
@@ -187,88 +254,106 @@ def main():
 
                 # 求人情報生成
                 job_posting = generate_job_posting(minutes, web_result["output"], llm)
-                save_job_posting_to_csv(job_posting, "./output")
+                save_job_posting_to_csv(job_posting, f'./output/{st.session_state.session_id}', f'{safe_filename}_job_postings.csv')
                 st.success("求人情報が生成されました")
 
         st.markdown("---")
         st.subheader("個別処理")
 
-        # 議事録作成ボタン
-        if st.button("議事録作成"):
-            with st.spinner("議事録作成中..."):
-                response = analyze_sounds(
-                    gcp_bucket=gcp_bucket,
-                    gcp_bucket_name=GCP_BUCKET_NAME,
-                    audio_file=m4a_path,
-                    model_name=GEMINI_MODEL_NAME,
-                    prompt=interview_prompt
-                )
-                minutes = response.candidates[0].content.parts[0].text
+        col1, col2, col3 = st.columns(3)
 
-                with open('./output/minutes.txt', 'w', encoding='utf-8') as f:
-                    f.write(minutes)
-                st.success("議事録が生成されました")
+        with col1:
+            # 議事録作成ボタン
+            if st.button("議事録作成"):
+                with st.spinner("議事録作成中..."):
+                    response = analyze_sounds(
+                        gcp_bucket=gcp_bucket,
+                        gcp_bucket_name=GCP_BUCKET_NAME,
+                        audio_file=m4a_path,
+                        model_name=GEMINI_MODEL_NAME,
+                        prompt=interview_prompt
+                    )
+                    minutes = response.candidates[0].content.parts[0].text
+                    minutes_filename = f'./output/{st.session_state.session_id}/{safe_filename}_minutes.txt'
+                    with open(minutes_filename, 'w', encoding='utf-8') as f:
+                        f.write(minutes)
+                    st.success("議事録が生成されました")
 
-        # Web検索ボタン
-        if st.button("Web検索実行"):
-            with st.spinner("Web検索中..."):
-                max_retries = 3
-                retry_count = 0
-                while retry_count < max_retries:
-                    try:
-                        web_result, usage = execute_web_search(url, target_company, web_search_task, instruction, llm)
-                        with open('./output/web_search_result.txt', 'w', encoding='utf-8') as f:
-                            f.write(web_result["output"])
-                        st.success("Web検索が完了しました")
-                        break
-                    except Exception as e:
-                        retry_count += 1
-                        if retry_count == max_retries:
-                            st.error(f"Web検索に失敗しました。エラー: {str(e)}")
-                        else:
-                            st.warning(f"Web検索に失敗しました。リトライ中... ({retry_count}/{max_retries})")
+        with col2:
+            # Web検索ボタン
+            if st.button("Web検索実行"):
+                with st.spinner("Web検索中..."):
+                    max_retries = 3
+                    retry_count = 0
+                    while retry_count < max_retries:
+                        try:
+                            web_result, usage = execute_web_search(url, target_company, web_search_task, instruction, llm)
+                            web_search_filename = f'./output/{st.session_state.session_id}/{safe_filename}_web_search_result.txt'
+                            with open(web_search_filename, 'w', encoding='utf-8') as f:
+                                f.write(web_result["output"])
+                            st.success("Web検索が完了しました")
+                            break
+                        except Exception as e:
+                            retry_count += 1
+                            if retry_count == max_retries:
+                                st.error(f"Web検索に失敗しました。エラー: {str(e)}")
+                            else:
+                                st.warning(f"Web検索に失敗しました。リトライ中... ({retry_count}/{max_retries})")
 
-        # CSV出力ボタン
-        if st.button("求人情報CSV出力"):
-            if not os.path.exists('./output/minutes.txt') or not os.path.exists('./output/web_search_result.txt'):
-                st.error("議事録とWeb検索結果が必要です。先に議事録作成とWeb検索を実行してください。")
-            else:
-                with st.spinner("求人情報生成中..."):
-                    with open('./output/minutes.txt', 'r', encoding='utf-8') as f:
-                        minutes = f.read()
-                    with open('./output/web_search_result.txt', 'r', encoding='utf-8') as f:
-                        web_result_output = f.read()
-                    job_posting = generate_job_posting(minutes, web_result_output, llm)
-                    save_job_posting_to_csv(job_posting, "./output")
-                    st.success("求人情報が生成されました")
+        with col3:
+            # CSV出力ボタン
+            if st.button("求人情報CSV出力"):
+                minutes_filename = f'./output/{st.session_state.session_id}/{safe_filename}_minutes.txt'
+                web_search_filename = f'./output/{st.session_state.session_id}/{safe_filename}_web_search_result.txt'
+                if not os.path.exists(minutes_filename) or not os.path.exists(web_search_filename):
+                    st.error("議事録とWeb検索結果が必要です。先に議事録作成とWeb検索を実行してください。")
+                else:
+                    with st.spinner("求人情報生成中..."):
+                        with open(minutes_filename, 'r', encoding='utf-8') as f:
+                            minutes = f.read()
+                        with open(web_search_filename, 'r', encoding='utf-8') as f:
+                            web_result_output = f.read()
+                        job_posting = generate_job_posting(minutes, web_result_output, llm)
+                        save_job_posting_to_csv(job_posting, f'./output/{st.session_state.session_id}', f'{safe_filename}_job_postings.csv')
+                        st.success("求人情報が生成されました")
 
-        # ファイルダウンロードボタン
-        if os.path.exists('./output/minutes.txt'):
-            with open('./output/minutes.txt', 'r', encoding='utf-8') as f:
-                st.download_button(
-                    label="議事録をダウンロード",
-                    data=f.read(),
-                    file_name=uploaded_file.name + "_minutes.txt",
-                    mime="text/plain"
-                )
+        st.markdown("---")
+        st.subheader("ファイルダウンロード")
 
-        if os.path.exists('./output/web_search_result.txt'):
-            with open('./output/web_search_result.txt', 'r', encoding='utf-8') as f:
-                st.download_button(
-                    label="Web検索結果をダウンロード",
-                    data=f.read(),
-                    file_name=uploaded_file.name + "_web_search_result.txt",
-                    mime="text/plain"
-                )
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            minutes_filename = f'./output/{st.session_state.session_id}/{safe_filename}_minutes.txt'
+            if os.path.exists(minutes_filename):
+                with open(minutes_filename, 'r', encoding='utf-8') as f:
+                    st.download_button(
+                        label="議事録をダウンロード",
+                        data=f.read(),
+                        file_name=f"{safe_filename}_minutes.txt",
+                        mime="text/plain"
+                    )
+
+        with col2:
+            web_search_filename = f'./output/{st.session_state.session_id}/{safe_filename}_web_search_result.txt'
+            if os.path.exists(web_search_filename):
+                with open(web_search_filename, 'r', encoding='utf-8') as f:
+                    st.download_button(
+                        label="Web検索結果をダウンロード",
+                        data=f.read(),
+                        file_name=f"{safe_filename}_web_search_result.txt",
+                        mime="text/plain"
+                    )
         
-        if os.path.exists('./output/job_postings.csv'):
-            with open('./output/job_postings.csv', 'r', encoding='utf-8') as f:
-                st.download_button(
-                    label="求人情報をダウンロード (CSV)",
-                    data=f.read(),
-                    file_name=uploaded_file.name + "_job_postings.csv",
-                    mime="text/csv"
-                )
+        with col3:
+            csv_filename = f'./output/{st.session_state.session_id}/{safe_filename}_job_postings.csv'
+            if os.path.exists(csv_filename):
+                with open(csv_filename, 'r', encoding='utf-8') as f:
+                    st.download_button(
+                        label="求人情報をダウンロード (CSV)",
+                        data=f.read(),
+                        file_name=f"{safe_filename}_job_postings.csv",
+                        mime="text/csv"
+                    )
 
 if __name__ == "__main__":
     main()
